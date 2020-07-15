@@ -79,13 +79,13 @@ const diffDepTypesNmFixture = {
 let prefix
 let result = ''
 const _flatOptions = {
-  dev: false,
+  dev: false, // XXX: not in flat options
   depth: Infinity,
   json: false,
   link: false,
-  only: null,
+  only: null, // XXX: not in flat options
   parseable: false,
-  production: false
+  production: false // XXX: not in flat options
 }
 const ls = requireInject('../../lib/ls.js', {
   '../../lib/npm.js': {
@@ -93,7 +93,7 @@ const ls = requireInject('../../lib/ls.js', {
     limit: {
       fetch: 3
     },
-    get dir () { return prefix + '/node_modules/' },
+    get prefix () { return prefix },
     globalDir: '/foo',
     config: {
       get (key) {
@@ -105,12 +105,18 @@ const ls = requireInject('../../lib/ls.js', {
 })
 
 const redactCwd = res =>
-    res.replace(/\\/g, '/').replace(new RegExp(__dirname.replace(/\\/g, '/'), 'gi'), '{CWD}')
+  res && res.replace(/\\/g, '/').replace(new RegExp(__dirname.replace(/\\/g, '/'), 'gi'), '{CWD}')
 
 const jsonParse = res =>
   JSON.parse(redactCwd(res))
 
+const cleanUpResult = (done, t) => {
+  result = ''
+  done()
+}
+
 test('ls', (t) => {
+  t.beforeEach(cleanUpResult)
   _flatOptions.json = false
   _flatOptions.unicode = false
   t.test('no args', (t) => {
@@ -137,8 +143,14 @@ test('ls', (t) => {
       ...simpleNmFixture
     })
     ls([], (err) => {
-      t.ifError(err, 'npm ls')
-      t.matchSnapshot(redactCwd(result), 'should output json missing name/version of top-level package')
+      // XXX: snapshot once wrapped up
+      /*
+      t.matchSnapshot(
+        redactCwd(err),
+        'should log all extraneous deps on error msg'
+      )
+      */
+      t.matchSnapshot(redactCwd(result), 'should output tree missing name/version of top-level package')
       t.end()
     })
   })
@@ -155,8 +167,9 @@ test('ls', (t) => {
       ...simpleNmFixture
     })
     ls([], (err) => {
+      t.equal(err.code, 'ELSPROBLEMS', 'should have error code')
       t.equal(
-        redactCwd(err),
+        redactCwd(err.message),
         'extraneous: lorem@1.0.0 {CWD}/ls-ls-extraneous-deps/node_modules/lorem',
         'should log extraneous dep as error'
       )
@@ -237,11 +250,49 @@ test('ls', (t) => {
         name: 'test-npm-ls',
         version: '1.0.0',
         dependencies: {
-          foo: '^1.0.0',
-          lorem: '^1.0.0'
+          a: '^1.0.0',
+          e: '^1.0.0'
         }
       }),
-      ...simpleNmFixture
+      node_modules: {
+        a: {
+          'package.json': JSON.stringify({
+            name: 'a',
+            version: '1.0.0',
+            dependencies: {
+              b: '^1.0.0'
+            }
+          })
+        },
+        b: {
+          'package.json': JSON.stringify({
+            name: 'b',
+            version: '1.0.0',
+            dependencies: {
+              c: '^1.0.0',
+              d: '*'
+            }
+          })
+        },
+        c: {
+          'package.json': JSON.stringify({
+            name: 'c',
+            version: '1.0.0'
+          })
+        },
+        d: {
+          'package.json': JSON.stringify({
+            name: 'd',
+            version: '1.0.0'
+          })
+        },
+        e: {
+          'package.json': JSON.stringify({
+            name: 'e',
+            version: '1.0.0'
+          })
+        }
+      }
     })
     ls([], (err) => {
       t.ifError(err, 'npm ls')
@@ -264,8 +315,16 @@ test('ls', (t) => {
       }),
       ...simpleNmFixture
     })
-    ls([], () => {
-      t.matchSnapshot(redactCwd(result), 'should output tree containing top-level deps and their deps only')
+    ls([], (err) => {
+      t.equal(err.code, 'ELSPROBLEMS', 'should have error code')
+      t.equal(
+        redactCwd(err.message),
+        'invalid: foo@1.0.0 {CWD}/ls-ls-missing-invalid-extraneous/node_modules/foo\n' +
+        'missing: ipsum@^1.0.0, required by test-npm-ls@1.0.0\n' +
+        'extraneous: lorem@1.0.0 {CWD}/ls-ls-missing-invalid-extraneous/node_modules/lorem',
+        'should log missing/invalid/extraneous errors'
+      )
+      t.matchSnapshot(redactCwd(result), 'should output tree containing missing, invalid, extraneous labels')
       _flatOptions.depth = Infinity
       t.end()
     })
@@ -491,7 +550,7 @@ test('ls', (t) => {
       'package.json': '{broken json'
     })
     ls([], (err) => {
-      t.match(err, /Failed to parse json/)
+      t.match(err, { code: 'EJSONPARSE' }, 'should throw EJSONPARSE error')
       t.matchSnapshot(redactCwd(result), 'should print empty result')
       t.end()
     })
@@ -506,7 +565,7 @@ test('ls', (t) => {
     })
   })
 
-  t.test('unmet peer dep', (t) => {
+  t.test('invalid peer dep', (t) => {
     prefix = t.testdir({
       'package.json': JSON.stringify({
         name: 'test-npm-ls',
@@ -528,6 +587,23 @@ test('ls', (t) => {
       ...diffDepTypesNmFixture
     })
     ls([], () => {
+      t.matchSnapshot(redactCwd(result), 'should output tree signaling mismatching peer dep in problems')
+      t.end()
+    })
+  })
+
+  t.skip('unmet peer dep', (t) => {
+    prefix = t.testdir({
+      'package.json': JSON.stringify({
+        name: 'test-npm-ls',
+        version: '1.0.0',
+        peerDependencies: {
+          'peer-dep': '*'
+        }
+      })
+    })
+    ls([], (err) => {
+      t.ifError(err, 'npm ls')
       t.matchSnapshot(redactCwd(result), 'should output tree signaling missing peer dep in problems')
       t.end()
     })
@@ -555,8 +631,10 @@ test('ls', (t) => {
       }),
       ...diffDepTypesNmFixture
     })
-    ls([], () => {
+    ls([], (err) => {
+      t.match(err, { code: 'ELSPROBLEMS' }, 'should list dep problems')
       t.matchSnapshot(redactCwd(result), 'should output tree with empty entry for missing optional deps')
+
       t.end()
     })
   })
@@ -591,7 +669,8 @@ test('ls', (t) => {
         }
       }
     })
-    ls([], () => {
+    ls([], (err) => {
+      t.ifError(err, 'npm ls')
       t.matchSnapshot(redactCwd(result), 'should print tree output containing deduped ref')
       t.end()
     })
@@ -655,7 +734,8 @@ test('ls', (t) => {
         }
       }
     })
-    ls([], () => {
+    ls([], (err) => {
+      t.ifError(err, 'npm ls')
       t.matchSnapshot(redactCwd(result), 'should output tree containing git refs')
       t.end()
     })
@@ -708,6 +788,7 @@ test('ls', (t) => {
 })
 
 test('ls --parseable', (t) => {
+  t.beforeEach(cleanUpResult)
   _flatOptions.json = false
   _flatOptions.unicode = false
   _flatOptions.parseable = true
@@ -725,7 +806,7 @@ test('ls --parseable', (t) => {
     })
     ls([], (err) => {
       t.ifError(err, 'npm ls')
-      t.matchSnapshot(redactCwd(result), 'should output tree representation of dependencies structure')
+      t.matchSnapshot(redactCwd(result), 'should output parseable representation of dependencies structure')
       t.end()
     })
   })
@@ -735,8 +816,14 @@ test('ls --parseable', (t) => {
       ...simpleNmFixture
     })
     ls([], (err) => {
-      t.ifError(err, 'npm ls')
-      t.matchSnapshot(redactCwd(result), 'should output json missing name/version of top-level package')
+      // XXX: snapshot once wrapped up
+      /*
+      t.matchSnapshot(
+        redactCwd(err),
+        'should log all extraneous deps on error msg'
+      )
+      */
+      t.matchSnapshot(redactCwd(result), 'should output parseable missing name/version of top-level package')
       t.end()
     })
   })
@@ -753,11 +840,7 @@ test('ls --parseable', (t) => {
       ...simpleNmFixture
     })
     ls([], (err) => {
-      t.equal(
-        redactCwd(err),
-        'extraneous: lorem@1.0.0 {CWD}/ls-ls-parseable-extraneous-deps/node_modules/lorem',
-        'should log extraneous dep as error'
-      )
+      t.equal(err.code, 'ELSPROBLEMS', 'should have error code')
       t.matchSnapshot(redactCwd(result), 'should output containing problems info')
       t.end()
     })
@@ -843,7 +926,7 @@ test('ls --parseable', (t) => {
     })
     ls([], (err) => {
       t.ifError(err, 'npm ls')
-      t.matchSnapshot(redactCwd(result), 'should output tree containing top-level deps and their deps only')
+      t.matchSnapshot(redactCwd(result), 'should output parseable containing top-level deps and their deps only')
       _flatOptions.depth = Infinity
       t.end()
     })
@@ -862,8 +945,9 @@ test('ls --parseable', (t) => {
       }),
       ...simpleNmFixture
     })
-    ls([], () => {
-      t.matchSnapshot(redactCwd(result), 'should output tree containing top-level deps and their deps only')
+    ls([], (err) => {
+      t.match(err, { code: 'ELSPROBLEMS' }, 'should list dep problems')
+      t.matchSnapshot(redactCwd(result), 'should output parseable containing top-level deps and their deps only')
       _flatOptions.depth = Infinity
       t.end()
     })
@@ -1053,6 +1137,24 @@ test('ls --parseable', (t) => {
     })
   })
 
+  t.skip('--long with extraneous deps', (t) => {
+    prefix = t.testdir({
+      'package.json': JSON.stringify({
+        name: 'test-npm-ls',
+        version: '1.0.0',
+        dependencies: {
+          foo: '^1.0.0'
+        }
+      }),
+      ...simpleNmFixture
+    })
+    ls([], (err) => {
+      t.equal(err.code, 'ELSPROBLEMS', 'should have error code')
+      t.matchSnapshot(redactCwd(result), 'should output long parseable output with extraneous info')
+      t.end()
+    })
+  })
+
   t.test('--long --depth=0', (t) => {
     _flatOptions.depth = 0
     _flatOptions.long = true
@@ -1089,7 +1191,7 @@ test('ls --parseable', (t) => {
       'package.json': '{broken json'
     })
     ls([], (err) => {
-      t.match(err, /Failed to parse json/)
+      t.match(err, { code: 'EJSONPARSE' }, 'should throw EJSONPARSE error')
       t.matchSnapshot(redactCwd(result), 'should print empty result')
       t.end()
     })
@@ -1126,7 +1228,7 @@ test('ls --parseable', (t) => {
       ...diffDepTypesNmFixture
     })
     ls([], () => {
-      t.matchSnapshot(redactCwd(result), 'should output tree signaling missing peer dep in problems')
+      t.matchSnapshot(redactCwd(result), 'should output parseable signaling missing peer dep in problems')
       t.end()
     })
   })
@@ -1154,7 +1256,7 @@ test('ls --parseable', (t) => {
       ...diffDepTypesNmFixture
     })
     ls([], () => {
-      t.matchSnapshot(redactCwd(result), 'should output tree with empty entry for missing optional deps')
+      t.matchSnapshot(redactCwd(result), 'should output parseable with empty entry for missing optional deps')
       t.end()
     })
   })
@@ -1306,6 +1408,7 @@ test('ls --parseable', (t) => {
 })
 
 test('ls --json', (t) => {
+  t.beforeEach(cleanUpResult)
   _flatOptions.json = true
   _flatOptions.parseable = false
   t.test('no args', (t) => {
